@@ -3,7 +3,7 @@ name: Build pickleball dashboard
 on:
   workflow_dispatch:        # lets you run it manually from the Actions tab
   schedule:
-    - cron: "*/30 * * * *"  # auto-refresh every 30 min (UTC; may run a little late)
+    - cron: "*/15 * * * *"  # auto-refresh every 30 min (UTC; may run a little late)
   push:
     branches: [ main ]
 
