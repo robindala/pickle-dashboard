@@ -53,6 +53,8 @@ COURTS = [
      "url": "https://champions-field.rezerv.co/appointment-booking?apptId=5795aa96-fc59-47e0-8c0f-447d3a585205&locationId=759f6fed-df2c-4522-8309-5c47e2c14385"},
     {"name": "Middleton", "system": "rezerv",
      "url": "https://middletonpickleballclub.rezerv.co/appointment-booking?apptId=23b89403-cc75-4de7-93b8-dcacfcc36fb1&locationId=438497c5-ace3-4ec8-8eb9-3af892afc188"},
+    {"name": "Homecourt", "system": "rezerv",
+     "url": "https://homecourtpickleballcdo.rezerv.co/appointment-booking?apptId=07ca3f66-dd20-44da-9772-39024d3b34ae&locationId=10ce4615-53c1-43f8-a087-ad8924d50958"},
 ]
 
 PAGE_WAIT = 6
@@ -173,33 +175,52 @@ def render_days(r, days):
                    f'rel="noopener">{lbl}</a><div class="chips">{chips}</div></div>')
     return "".join(out)
 
-def court_card(r, year, month):
-    days = {d: t for d, t in r["by_day"].items() if d.year == year and d.month == month}
-    total = sum(sum(t.values()) for t in days.values())
-    if r["kind"] == "ok" and total > 0:
-        status, body = f'<span class="pill pill-good">{total} open</span>', render_days(r, days)
-    elif r["kind"] == "ok":
-        status = '<span class="pill pill-bad">fully booked</span>'
-        body = '<p class="msg">No open slots this month.</p>'
-    elif r["kind"] == "auth":
-        status = '<span class="pill pill-warn">blocked</span>'
-        body = f'<p class="msg">Site refused the request. <code>{r["note"]}</code></p>'
-    else:
-        status = '<span class="pill pill-bad">no data</span>'
-        body = f'<p class="msg">Couldn\'t reach this site. <code>{r["note"]}</code></p>'
-    return (f'<article class="court"><header class="court-head"><h2>{r["name"]}</h2>'
-            f'{status}</header><div class="court-body">{body}</div></article>')
+def month_total(r, y, m):
+    return sum(sum(t.values()) for d, t in r["by_day"].items() if d.year == y and d.month == m)
+
+def month_body(r, y, m):
+    days = {d: t for d, t in r["by_day"].items() if d.year == y and d.month == m}
+    if r["kind"] == "ok" and days:
+        return render_days(r, days)
+    if r["kind"] == "ok":
+        return '<p class="msg">No open slots this month.</p>'
+    if r["kind"] == "auth":
+        return f'<p class="msg">Site refused the request. <code>{r["note"]}</code></p>'
+    return f'<p class="msg">Couldn\'t reach this site. <code>{r["note"]}</code></p>'
 
 def build_html(results):
     months = months_window()
+    (y0, m0, label0, _), (y1, m1, label1, _) = months
+    short0, short1 = date(y0, m0, 1).strftime("%B"), date(y1, m1, 1).strftime("%B")
     updated = ph_now().strftime("%a %d %b %Y \u00b7 %I:%M %p")
-    tabs, panes = [], []
-    for i, (y, m, label, _dates) in enumerate(months):
-        short = date(y, m, 1).strftime("%B")
-        tabs.append(f'<button class="tab{" active" if i == 0 else ""}" data-i="{i}">{short}</button>')
-        grid = "".join(court_card(r, y, m) for r in results)
-        panes.append(f'<div class="pane" data-i="{i}"{"" if i == 0 else " hidden"}>'
-                     f'<div class="month-name">{label}</div><div class="grid">{grid}</div></div>')
+
+    tiles, details = [], []
+    for i, r in enumerate(results):
+        t_now, t_next = month_total(r, y0, m0), month_total(r, y1, m1)
+        if r["kind"] != "ok":
+            stat = '<span class="tile-stat tile-bad">no data</span>'
+        elif t_now == 0 and t_next == 0:
+            stat = '<span class="tile-stat tile-bad">fully booked</span>'
+        else:
+            nxt = f'<span class="tile-sub">+{t_next} in {short1}</span>' if t_next else ""
+            stat = f'<span class="tile-stat"><b>{t_now}</b> open in {short0}</span>{nxt}'
+        tiles.append(f'<button class="tile" data-court="{i}">'
+                     f'<span class="tile-name">{r["name"]}</span>{stat}'
+                     f'<span class="tile-go">View slots \u2192</span></button>')
+
+        panes = []
+        for j, (yy, mm, lbl) in enumerate([(y0, m0, label0), (y1, m1, label1)]):
+            cnt = month_total(r, yy, mm)
+            head = f'{lbl}{f" \u00b7 {cnt} open" if cnt else ""}'
+            panes.append(f'<div class="pane" data-i="{j}"{"" if j == 0 else " hidden"}>'
+                         f'<div class="month-name">{head}</div>{month_body(r, yy, mm)}</div>')
+        details.append(
+            f'<section class="detail" data-court="{i}" hidden>'
+            f'<button class="back">\u2190 All courts</button>'
+            f'<h2 class="detail-title">{r["name"]}</h2>'
+            f'<div class="tabs"><button class="tab active" data-i="0">{short0}</button>'
+            f'<button class="tab" data-i="1">{short1}</button></div>'
+            f'{"".join(panes)}</section>')
 
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -212,7 +233,7 @@ def build_html(results):
 *{{box-sizing:border-box;}}
 body{{margin:0;background:linear-gradient(180deg,#0a1622,#0d1b2a);color:var(--line);font-family:Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased;min-height:100vh;}}
 .wrap{{max-width:1180px;margin:0 auto;padding:32px 20px 64px;}}
-.top{{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;border-bottom:2px solid rgba(245,247,245,.12);padding-bottom:18px;margin-bottom:18px;}}
+.top{{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;border-bottom:2px solid rgba(245,247,245,.12);padding-bottom:18px;margin-bottom:24px;}}
 .brand{{display:flex;align-items:center;gap:14px;}}
 .ball{{width:30px;height:30px;border-radius:50%;background:var(--optic);box-shadow:0 0 22px rgba(198,241,53,.45);position:relative;flex:none;}}
 .ball::before,.ball::after{{content:"";position:absolute;inset:0;border-radius:50%;border:1.5px solid rgba(13,27,42,.55);}}
@@ -220,20 +241,23 @@ body{{margin:0;background:linear-gradient(180deg,#0a1622,#0d1b2a);color:var(--li
 h1{{font-family:"Saira Condensed",sans-serif;font-weight:700;letter-spacing:.5px;font-size:30px;margin:0;text-transform:uppercase;}}
 h1 span{{color:var(--optic);}}
 .updated{{color:var(--slate);font-size:13px;text-align:right;}} .updated b{{color:var(--line);font-weight:600;}}
-.tabs{{display:flex;gap:8px;margin-bottom:8px;}}
+.tiles{{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));}}
+.tile{{text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:6px;min-height:150px;padding:20px;border-radius:16px;color:var(--line);background:linear-gradient(180deg,var(--deck),var(--deck-2));border:1px solid rgba(245,247,245,.09);transition:transform .1s ease,border-color .15s,box-shadow .15s;}}
+.tile:hover{{transform:translateY(-3px);border-color:rgba(198,241,53,.5);box-shadow:0 10px 30px rgba(0,0,0,.35);}}
+.tile:focus-visible{{outline:2px solid var(--optic);outline-offset:2px;}}
+.tile-name{{font-family:"Saira Condensed",sans-serif;font-weight:700;font-size:24px;letter-spacing:.4px;color:var(--clay);}}
+.tile-stat{{font-size:14px;color:var(--line);}} .tile-stat b{{color:var(--optic);font-size:20px;font-weight:700;}}
+.tile-bad{{color:var(--slate);}}
+.tile-sub{{font-size:12px;color:var(--slate);}}
+.tile-go{{margin-top:auto;font-size:12px;color:var(--slate);letter-spacing:.3px;}}
+.detail-title{{font-family:"Saira Condensed",sans-serif;font-weight:700;font-size:28px;margin:6px 0 4px;letter-spacing:.4px;color:var(--clay);text-transform:uppercase;}}
+.back{{background:transparent;border:none;color:var(--slate);font-size:14px;cursor:pointer;padding:0;margin-bottom:6px;}}
+.back:hover{{color:var(--line);}}
+.tabs{{display:flex;gap:8px;margin:10px 0 4px;}}
 .tab{{font-family:"Saira Condensed",sans-serif;font-weight:600;letter-spacing:.5px;text-transform:uppercase;font-size:14px;color:var(--slate);background:transparent;border:1px solid rgba(245,247,245,.14);padding:7px 16px;border-radius:999px;cursor:pointer;transition:all .15s;}}
 .tab:hover{{color:var(--line);}}
 .tab.active{{color:var(--court);background:var(--optic);border-color:var(--optic);}}
 .month-name{{color:var(--slate);font-size:12px;letter-spacing:.6px;text-transform:uppercase;margin:14px 0 16px;}}
-.grid{{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));}}
-.court{{background:linear-gradient(180deg,var(--deck),var(--deck-2));border:1px solid rgba(245,247,245,.08);border-radius:14px;overflow:hidden;display:flex;flex-direction:column;}}
-.court-head{{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:16px 18px;border-bottom:1px solid rgba(245,247,245,.08);background:rgba(255,255,255,.02);}}
-.court-head h2{{font-family:"Saira Condensed",sans-serif;font-weight:700;font-size:21px;margin:0;letter-spacing:.4px;color:var(--clay);}}
-.court-body{{padding:14px 18px 20px;}}
-.pill{{font-size:11px;font-weight:600;padding:4px 10px;border-radius:999px;white-space:nowrap;letter-spacing:.3px;text-transform:uppercase;}}
-.pill-good{{background:rgba(198,241,53,.16);color:var(--optic);border:1px solid rgba(198,241,53,.4);}}
-.pill-bad{{background:rgba(224,122,79,.14);color:var(--clay);border:1px solid rgba(224,122,79,.4);}}
-.pill-warn{{background:rgba(126,147,163,.16);color:var(--slate);border:1px solid rgba(126,147,163,.4);}}
 .day{{margin-bottom:14px;}}
 .day-label{{display:inline-block;font-size:12px;color:var(--slate);text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px;border-left:2px solid var(--optic);padding-left:8px;text-decoration:none;}}
 .day-label:hover{{color:var(--line);}}
@@ -249,17 +273,33 @@ footer{{margin-top:32px;color:var(--slate);font-size:12px;text-align:center;}}
 </style></head><body><div class="wrap">
 <div class="top"><div class="brand"><div class="ball"></div><h1>Open <span>Courts</span></h1></div>
 <div class="updated">last refreshed<br><b>{updated}</b></div></div>
-<div class="tabs">{''.join(tabs)}</div>
-{''.join(panes)}
-<footer>Tap a time to open that court on that date \u00b7 use the toggle for next month</footer>
+<section id="landing"><div class="tiles">{''.join(tiles)}</div></section>
+{''.join(details)}
+<footer>Pick a court \u00b7 tap a time to open it on that date \u00b7 toggle for next month</footer>
 </div>
 <script>
- const tabs=[...document.querySelectorAll('.tab')], panes=[...document.querySelectorAll('.pane')];
- tabs.forEach(t=>t.addEventListener('click',()=>{{
-   const i=t.dataset.i;
-   tabs.forEach(x=>x.classList.toggle('active',x===t));
-   panes.forEach(p=>p.hidden=(p.dataset.i!==i));
- }}));
+ const landing=document.getElementById('landing');
+ const tiles=[...document.querySelectorAll('.tile')];
+ const details=[...document.querySelectorAll('.detail')];
+ function showCourt(i){{
+   landing.hidden=true;
+   details.forEach(d=>d.hidden=(d.dataset.court!==i));
+   const d=details.find(x=>x.dataset.court===i);
+   d.querySelectorAll('.tab').forEach((t,k)=>t.classList.toggle('active',k===0));
+   d.querySelectorAll('.pane').forEach((p,k)=>p.hidden=(k!==0));
+   window.scrollTo(0,0);
+ }}
+ function showLanding(){{landing.hidden=false;details.forEach(d=>d.hidden=true);window.scrollTo(0,0);}}
+ tiles.forEach(t=>t.addEventListener('click',()=>showCourt(t.dataset.court)));
+ document.querySelectorAll('.back').forEach(b=>b.addEventListener('click',showLanding));
+ details.forEach(d=>{{
+   const tabs=[...d.querySelectorAll('.tab')], panes=[...d.querySelectorAll('.pane')];
+   tabs.forEach(t=>t.addEventListener('click',()=>{{
+     const i=t.dataset.i;
+     tabs.forEach(x=>x.classList.toggle('active',x===t));
+     panes.forEach(p=>p.hidden=(p.dataset.i!==i));
+   }}));
+ }});
 </script>
 </body></html>"""
 
