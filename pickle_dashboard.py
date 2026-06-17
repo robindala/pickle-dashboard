@@ -55,6 +55,8 @@ COURTS = [
      "url": "https://middletonpickleballclub.rezerv.co/appointment-booking?apptId=23b89403-cc75-4de7-93b8-dcacfcc36fb1&locationId=438497c5-ace3-4ec8-8eb9-3af892afc188"},
     {"name": "Homecourt", "system": "rezerv",
      "url": "https://homecourtpickleballcdo.rezerv.co/appointment-booking?apptId=07ca3f66-dd20-44da-9772-39024d3b34ae&locationId=10ce4615-53c1-43f8-a087-ad8924d50958"},
+    {"name": "Match Point", "system": "matchpoint",
+     "url": "https://matchpointsc.com/"},
 ]
 
 PAGE_WAIT = 6
@@ -149,6 +151,55 @@ def fetch_rezerv(page, court):
     return slots, "ok", ""
 
 
+# ---------------------------------------------------------------- MATCH POINT (WordPress)
+def parse_matchpoint_day(day, body):
+    out = []
+    if not body or not body.get("success"):
+        return out
+    for c in (body.get("data") or {}).get("courts", []):
+        name = c.get("name")
+        for tm, info in (c.get("slots") or {}).items():
+            if isinstance(info, dict) and info.get("status") == "available":
+                start = tm if len(tm) > 5 else tm + ":00"   # "15:00" -> "15:00:00"
+                out.append({"date": day, "start": start, "court": name,
+                            "price": info.get("price")})
+    return out
+
+def fetch_matchpoint(page, court):
+    page.goto(court["url"], wait_until="domcontentloaded", timeout=45000)
+    try:
+        page.wait_for_function("() => window.dp_ajax && window.dp_ajax.nonce", timeout=PAGE_WAIT * 1000)
+    except Exception:
+        pass
+    page.wait_for_timeout(800)
+
+    slots, statuses = [], []
+    for d in ALL_DATES:
+        ds = d.isoformat()
+        try:
+            res = page.evaluate(
+                "async (ds) => {"
+                " if(!window.dp_ajax) return {status:-2, text:'no dp_ajax'};"
+                " const body='action=dp_get_time_slots&nonce='+encodeURIComponent(dp_ajax.nonce)+'&date='+ds;"
+                " try{ const r=await fetch(dp_ajax.ajax_url,{method:'POST',credentials:'include',"
+                "   headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},body});"
+                "   return {status:r.status, text:await r.text()}; }"
+                " catch(e){ return {status:-1, text:String(e)}; } }", ds)
+        except Exception as e:
+            res = {"status": -1, "text": str(e)}
+        statuses.append(res.get("status"))
+        if res.get("status") == 200:
+            try:
+                slots += parse_matchpoint_day(ds, json.loads(res["text"]))
+            except Exception:
+                pass
+        page.wait_for_timeout(80)
+
+    if statuses.count(200) == 0:
+        return [], "error", f"HTTP statuses: {sorted(set(statuses))}"
+    return slots, "ok", ""
+
+
 # ---------------------------------------------------------------- summarise
 def summarize(court, slots, kind, note):
     by_day = {}
@@ -164,7 +215,8 @@ def summarize(court, slots, kind, note):
 def render_days(r, days):
     out = []
     for day, times in days.items():
-        href = f'{r["url"]}&apptDate={day.isoformat()}'
+        sep = "&" if "?" in r["url"] else "?"
+        href = f'{r["url"]}{sep}apptDate={day.isoformat()}'
         chips = "".join(
             f'<a class="chip" href="{href}" target="_blank" rel="noopener" '
             f'title="Open {r["name"]} on {day.strftime("%a %d %b")}">{fmt_time(t)}'
@@ -316,7 +368,10 @@ def main():
             print(f"   - {court['name']} ...", end=" ", flush=True)
             page = ctx.new_page()
             try:
-                slots, kind, note = fetch_rezerv(page, court)
+                if court["system"] == "matchpoint":
+                    slots, kind, note = fetch_matchpoint(page, court)
+                else:
+                    slots, kind, note = fetch_rezerv(page, court)
             except Exception as e:
                 slots, kind, note = [], "error", str(e)[:120]
             finally:
